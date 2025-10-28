@@ -25,7 +25,7 @@ class VideoService {
     }
 
     getVideoUrl(videoName) {
-        return `/videos/${videoName}`;
+        return `https://webxr-c3su.onrender.com/videos/${videoName}`;
     }
 }
 
