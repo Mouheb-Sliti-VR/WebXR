@@ -1,44 +1,51 @@
 const VideoService = require('../services/videoService');
 
 class VideoController {
-    constructor() {
-        this.videoService = new VideoService();
+    constructor(videoService) {
+        this.videoService = videoService;
     }
 
     async uploadVideo(req, res) {
         try {
-            const video = req.file;
-            if (!video) {
-                return res.status(400).json({ message: 'No video file uploaded.' });
+            if (!req.pendingVideoUrl) {
+                throw new Error('Video upload failed');
             }
-            res.status(201).json({
-                message: 'Video uploaded and converted successfully.'
+            return res.status(202).json({
+                success: true,
+                message: 'Video uploaded successfully and is being converted',
+                pendingVideoUrl: req.pendingVideoUrl,
+                status: 'converting'
             });
-
-            // Start conversion asynchronously in the background. We don't await it here
-            // so the client gets an immediate success response.
-            this.videoService.convertVideo(video)
-                .then(outputPath => console.log('Background conversion completed:', outputPath))
-                .catch(err => console.error('Background conversion failed:', err));
         } catch (error) {
-            res.status(500).json({ 
-                message: 'Error uploading video.',
+            return res.status(400).json({ success: false, error: error.message });
+        }
+    }
+
+    async getVideos(req, res) {
+        try {
+            const videos = await this.videoService.getVideoUrls();
+            return res.status(200).json({ 
+                success: true,
+                videos
+            });
+        } catch (error) {
+            return res.status(500).json({ 
+                success: false, 
                 error: error.message 
             });
         }
     }
 
-    async getVideoUrls(req, res) {
+    async checkVideoStatus(req, res) {
         try {
-            const videoUrls = await this.videoService.getVideoUrls();
-            res.status(200).json({ 
-                videosUrls: videoUrls 
-            });
+            const { videoUrl } = req.params; // expected param is filename or URL segment
+            // extract basename in case a full URL was passed
+            const name = videoUrl ? videoUrl.split('/').pop() : null;
+            if (!name) return res.status(400).json({ success: false, error: 'videoUrl param required' });
+            const status = await this.videoService.checkVideoStatus(name);
+            return res.status(200).json(Object.assign({ success: true }, status));
         } catch (error) {
-            res.status(500).json({ 
-                message: 'Error retrieving video URLs.',
-                error: error.message 
-            });
+            return res.status(500).json({ success: false, error: error.message });
         }
     }
 }

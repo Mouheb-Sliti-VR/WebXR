@@ -3,7 +3,7 @@ const path = require('path');
 const videoRoutes = require('./routes/videoRoutes');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 // Create required directories if they don't exist
 const fs = require('fs');
