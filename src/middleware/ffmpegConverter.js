@@ -1,69 +1,68 @@
-const { spawn } = require('child_process');
 const path = require('path');
-const fs = require('fs').promises;
 const os = require('os');
+const fs = require('fs').promises;
+const ffmpegPath = require('ffmpeg-static');
+const ffmpeg = require('fluent-ffmpeg');
 const { Storage } = require('@google-cloud/storage');
 
 const storage = new Storage();
 const bucketName = process.env.GCS_BUCKET_NAME;
 
-const convertVideo = async (inputPath, outputPath) => {
-  console.log('Converting:', path.basename(inputPath));
+if (!bucketName) {
+  throw new Error('GCS_BUCKET_NAME environment variable is not set');
+}
 
-  const ffmpeg = spawn('ffmpeg', [
-    '-y',
-    '-i', inputPath,
-    '-c:v', 'libtheora',
-    '-c:a', 'libvorbis',
-    '-q:v', '7',
-    '-q:a', '4',
-    outputPath,
-  ]);
-
-  await new Promise((resolve, reject) => {
-    ffmpeg.on('close', code => {
-      if (code !== 0) reject(new Error(`FFmpeg exited with code ${code}`));
-      else resolve();
-    });
-    ffmpeg.on('error', reject);
-  });
-};
+// Configure fluent-ffmpeg to use the static binary
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 const ffmpegConverter = async (req, res, next) => {
   try {
-    if (!req.file) {
-      return res.status(400).send('No file uploaded.');
-    }
+    if (!req.file) return res.status(400).send('No file uploaded.');
 
-    const bucket = storage.bucket(bucketName);
-
-    // 1️⃣ Write memory buffer to /tmp
     const inputFilename = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
     const inputPath = path.join(os.tmpdir(), inputFilename);
-    await fs.writeFile(inputPath, req.file.buffer);
 
-    // 2️⃣ Prepare output paths
     const outputFilename = `${path.parse(inputFilename).name}.ogv`;
     const outputPath = path.join(os.tmpdir(), outputFilename);
 
-    // 3️⃣ Public URL (predictive)
-    req.pendingVideoUrl = `https://storage.googleapis.com/${bucketName}/videos/${outputFilename}`;
+    // Write uploaded MP4 to /tmp
+    await fs.writeFile(inputPath, req.file.buffer);
 
-    // 4️⃣ Run conversion in background
+    // Predictive public URL
+    const publicUrl = `https://storage.googleapis.com/${bucketName}/videos/${outputFilename}`;
+    req.pendingVideoUrl = publicUrl;
+
+    // Convert in background
     (async () => {
       try {
-        await convertVideo(inputPath, outputPath);
+        await new Promise((resolve, reject) => {
+          ffmpeg(inputPath)
+            .outputOptions([
+              '-c:v libtheora',
+              '-c:a libvorbis',
+              '-q:v 5',
+              '-q:a 4',
+              '-threads 0'
+            ])
+            .output(outputPath)
+            .on('end', resolve)
+            .on('error', reject)
+            .run();
+        });
 
-        // 5️⃣ Upload to GCS (public)
+        // Upload OGV to GCS
+        const bucket = storage.bucket(bucketName);
         await bucket.upload(outputPath, {
           destination: `videos/${outputFilename}`,
           public: true,
         });
+
         console.log(`✅ Uploaded ${outputFilename} to GCS`);
 
-        // 6️⃣ Cleanup
+        // Cleanup
         await fs.unlink(inputPath).catch(() => {});
         await fs.unlink(outputPath).catch(() => {});
+
       } catch (err) {
         console.error('❌ Conversion error:', err.message);
       }

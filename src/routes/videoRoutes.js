@@ -9,23 +9,25 @@ const videoService = new VideoService();
 const videoController = new VideoController(videoService);
 
 function setVideoRoutes(app) {
-    // Upload route: multer saves the file, ffmpeg converts it, then controller handles the response
-    router.post('/upload', 
+    // 1️⃣ Upload route: multer saves file in memory, ffmpeg converts to OGV, controller returns URL
+    router.post(
+        '/upload',
         multerConfig.single('video'),
         ffmpegConverter,
         videoController.uploadVideo.bind(videoController)
     );
-    
+
+    // 2️⃣ Get all videos (list of OGV URLs)
     router.get('/videos', videoController.getVideos.bind(videoController));
-    
-    // Check video conversion status
+
+    // 3️⃣ Check video conversion status
     router.get('/status/:videoUrl', videoController.checkVideoStatus.bind(videoController));
 
-    // Serve static video files
-    app.use('/videos', express.static('public/videos'));
-    
-    // API routes
+    // 4️⃣ Mount API routes under /api/videos
     app.use('/api/videos', router);
+
+    // 5️⃣ Optional health check for Cloud Run
+    app.get('/health-check', (req, res) => res.send('OK'));
 }
 
 module.exports = setVideoRoutes;
