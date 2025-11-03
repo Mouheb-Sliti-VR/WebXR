@@ -6,6 +6,44 @@ class VideoController {
         this.videoService = videoService;
     }
 
+    // New: upload MP4 directly to GCS uploads/ (no conversion)
+    async uploadRawVideo(req, res) {
+        try {
+            logger.info('Processing raw-upload request', {
+                originalname: req?.file?.originalname,
+                mimetype: req?.file?.mimetype,
+                size: req?.file?.size
+            });
+
+            if (!req.file) {
+                logger.warn('Raw upload failed: no file in request');
+                return res.status(400).json({ success: false, error: 'No file uploaded' });
+            }
+
+            const publicUrl = await this.videoService.uploadRaw(
+                req.file.buffer,
+                req.file.originalname,
+                req.file.mimetype
+            );
+
+            logger.info('Raw upload succeeded', { publicUrl });
+
+            return res.status(201).json({
+                success: true,
+                message: 'Raw MP4 uploaded',
+                videoUrl: publicUrl,
+                status: 'uploaded'
+            });
+        } catch (error) {
+            logger.error('Raw upload failed', {
+                error: error.message,
+                stack: error.stack,
+                originalname: req?.file?.originalname
+            });
+            return res.status(500).json({ success: false, error: error.message });
+        }
+    }
+
     // Upload endpoint returns predictive URL immediately
     async uploadVideo(req, res) {
         try {

@@ -13,6 +13,7 @@ if (!bucketName) {
   throw new Error('GCS_BUCKET_NAME environment variable is not set');
 }
 
+// Use static ffmpeg binary
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const ffmpegConverter = async (req, res, next) => {
@@ -22,34 +23,40 @@ const ffmpegConverter = async (req, res, next) => {
       return res.status(400).send('No file uploaded.');
     }
 
+    // Prepare filenames and temp paths
     const inputFilename = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
     const outputFilename = `${path.parse(inputFilename).name}.ogv`;
     const inputPath = path.join(os.tmpdir(), inputFilename);
     const outputPath = path.join(os.tmpdir(), outputFilename);
 
+    const bucket = storage.bucket(bucketName);
+    const uploadDest = `uploads/${inputFilename}`;
+    const convertedDest = `videos/${outputFilename}`;
+    const publicUrl = `https://storage.googleapis.com/${bucketName}/${convertedDest}`;
+    req.pendingVideoUrl = publicUrl;
+
     logger.info('Starting video processing', {
       originalName: req.file.originalname,
       inputPath,
       outputPath,
-      fileSize: req.file.size
+      uploadDest,
+      convertedDest
     });
 
     // Save uploaded MP4 temporarily
     await fs.writeFile(inputPath, req.file.buffer);
 
-    const bucket = storage.bucket(bucketName);
-    const publicUrl = `https://storage.googleapis.com/${bucketName}/videos/${outputFilename}`;
-    req.pendingVideoUrl = publicUrl;
-
-    // Upload original file first (for safety)
-    const uploadDest = `uploads/${inputFilename}`;
-    await bucket.upload(inputPath, { destination: uploadDest, public: false });
+    // Upload raw MP4 only once to "uploads/"
+    await bucket.upload(inputPath, {
+      destination: uploadDest,
+      public: false
+    });
     logger.info('Uploaded raw MP4 to GCS', { uploadDest });
 
     // Start conversion in background
     (async () => {
       try {
-        logger.info('FFmpeg conversion starting', { inputPath, outputPath });
+        logger.info('Starting FFmpeg conversion', { inputPath, outputPath });
         await new Promise((resolve, reject) => {
           ffmpeg(inputPath)
             .outputOptions([
@@ -61,31 +68,32 @@ const ffmpegConverter = async (req, res, next) => {
               '-threads 0'
             ])
             .on('start', cmd => logger.debug('FFmpeg command', { cmd }))
-            .on('progress', p => logger.debug('FFmpeg progress', { percent: p.percent }))
+            .on('progress', p => logger.debug('FFmpeg progress', { percent: p.percent?.toFixed(2) }))
             .on('end', resolve)
             .on('error', reject)
             .save(outputPath);
         });
 
-        // Upload converted file
+        // Upload converted .ogv to "videos/"
         await bucket.upload(outputPath, {
-          destination: `videos/${outputFilename}`,
-          public: true,
+          destination: convertedDest,
+          public: true
         });
         logger.info('OGV uploaded successfully', { publicUrl });
 
-        // Cleanup temp files
+      } catch (err) {
+        logger.error('FFmpeg conversion failed', { error: err.message });
+      } finally {
+        // Always clean up temp files
         await Promise.all([
           fs.unlink(inputPath).catch(() => {}),
           fs.unlink(outputPath).catch(() => {})
         ]);
-
-      } catch (err) {
-        logger.error('Background FFmpeg conversion failed', { error: err.message });
       }
     })().catch(err => logger.error('Async worker crash', { error: err.message }));
 
-    next(); // respond quickly
+    // Continue request flow immediately
+    next();
 
   } catch (err) {
     logger.error('Upload request failed', {
